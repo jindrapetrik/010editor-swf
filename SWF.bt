@@ -4,13 +4,14 @@
 //      File: SWF.bt
 //   Authors: Josh Zelonis
 //    E-mail: zelonis@gmail.com
-//   Version: 1.3
+//   Version: 1.4
 //   Purpose: Defines a template for parsing Adobe Flash SWF files 
 //            based on the file format specification for Flash 9.
 //  Category: Internet
 // File Mask: *.swf
 //  ID Bytes: 43 57 53, 46 57 53 //CWS, FWS
 //   History: 
+//   1.4   2023-03-07 JPEXS: GradientMatrix for FOCALGRADIENT fill style, FILTER.FilterId is ubyte, not ushort
 //   1.3   2016-01-30 SweetScape: Updated header for repository submission.
 //   1.2   TQN: Add code to check CWS file.
 //   1.1   J Zelonis: Updated email address.
@@ -814,7 +815,7 @@ typedef struct {
 
 
 typedef struct {
-    ushort FilterId;
+    ubyte FilterId;
     switch (FilterId) {
         case 0:
             DROPSHADOWFILTER DropShadowFilter;
@@ -869,6 +870,7 @@ typedef struct {
             GRADIENT Gradient;
             break;
         case 0x13:
+            MATRIX GradientMatrix;
             FOCALGRADIENT Gradient;
             break;
         case 0x40:
