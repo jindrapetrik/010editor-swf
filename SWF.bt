@@ -2,23 +2,22 @@
 //--- 010 Editor v3.0 Binary Template
 //
 //      File: SWF.bt
-//   Authors: Josh Zelonis
+//   Authors: Josh Zelonis, JPEXS
 //    E-mail: zelonis@gmail.com
-//   Version: 1.4
+//   Version: 2.0
 //   Purpose: Defines a template for parsing Adobe Flash SWF files 
 //            based on the file format specification for Flash 9.
 //  Category: Internet
 // File Mask: *.swf
-//  ID Bytes: 43 57 53, 46 57 53 //CWS, FWS
+//  ID Bytes: 43 57 53, 46 57 53, 5A 57 53 //CWS, FWS, ZWS
 //   History: 
+//   2.0   2023-03-10 JPEXS: AS3 bytecode (ABC) support, DefineSprite inner tags, MorphShape fix, Text tags, LZMA compressed SWF, various new added tags and fixes
 //   1.4   2023-03-07 JPEXS: GradientMatrix for FOCALGRADIENT fill style, FILTER.FilterId is ubyte, not ushort
 //   1.3   2016-01-30 SweetScape: Updated header for repository submission.
 //   1.2   TQN: Add code to check CWS file.
 //   1.1   J Zelonis: Updated email address.
 //   1.0   J Zelonis: Initial release.
 //
-// This is most compatible with Actionscript 1 and 2 as the Actionscript
-// Byte Code has not been templated in.
 //------------------------------------------------
 
 /***************
@@ -501,13 +500,15 @@ typedef struct {
 
 typedef struct {
     BigEndian();
-    local int i=0;
+    local uint value = 0;
+    local uint i=0;
     do {
-        byte next       : 1;
-        byte value      : 7;
-        i++;
+        ubyte next       : 1;
+        ubyte valuePart  : 7;
+        value = value | ((uint)valuePart << (i * 7));
+        i++;        
     } while (i<5 & next);
-} EncodedU32;
+} EncodedU32 <read=(value)>;
 
 typedef struct {
     do {
@@ -754,7 +755,7 @@ typedef struct {
     || (CurrentTag == 22)) {    /* DefineShape2 */
         RGB Color;
     }
-    else {              /* DefineShape3 */
+    else {              /* DefineShape3 or DefineShape4 */
         RGBA Color;
     }
 } GRADRECORD;
@@ -762,7 +763,7 @@ typedef struct {
 typedef struct {
     local short i;
     ubyte SpreadMode        : 2;
-    ubyte InterpolationMode     : 2;
+    ubyte InterpolationMode : 2;
     ubyte NumGradients      : 4;
     for (i=0; i<NumGradients; i++) {
         GRADRECORD GradientRecord;
@@ -772,7 +773,7 @@ typedef struct {
 typedef struct {
     local short i;
     ubyte SpreadMode        : 2;
-    ubyte InterpolationMode     : 2;
+    ubyte InterpolationMode : 2;
     ubyte NumGradients      : 4;
     for (i=0; i<NumGradients; i++) {
         GRADRECORD GradientRecord;
@@ -792,7 +793,7 @@ typedef struct {
     ubyte InnerShadow           : 1;
     ubyte Knockout              : 1;
     ubyte CompositeSource       : 1;
-    ubyte OnTop         : 1;
+    ubyte OnTop                 : 1;
     ubyte Passes                : 4;
 } GRADIENTGLOWFILTER;
 
@@ -808,7 +809,7 @@ typedef struct {
     ubyte InnerShadow           : 1;
     ubyte Knockout              : 1;
     ubyte CompositeSource       : 1;
-    ubyte OnTop         : 1;
+    ubyte OnTop                 : 1;
     ubyte Passes                : 4;
 } GRADIENTBEVELFILTER;
 
@@ -860,7 +861,7 @@ typedef struct {
             || (CurrentTag == 22)) {    /* DefineShape2 */
                 RGB Color;
             }
-            else {              /* DefineShape3 */
+            else {              /* DefineShape3 or DefineShape4 */
                 RGBA Color;
             }
             break;
@@ -883,7 +884,22 @@ typedef struct {
         default:
             break;
     }
-} FILLSTYLE;
+} FILLSTYLE <read=GetFillStyleType(this.FillStyleType)>;
+
+string GetFillStyleType(ubyte fillStyleType)
+{    
+    switch (fillStyleType) {
+        case 0x00: return "solid fill";
+        case 0x10: return "linear gradient fill";
+        case 0x12: return "radial gradient fill";
+        case 0x13: return "focal radial gradient fill";
+        case 0x40: return "repeating bitmap fill";
+        case 0x41: return "clipped bitmap fill";
+        case 0x42: return "non-smoothed repeating bitmap fill";
+        case 0x43: return "non-smoothed clipped bitmap fill";
+        default:   return Str("unknown0x%02X", fillStyleType);
+    }
+}
 
 typedef struct {
     local ushort i;
@@ -907,7 +923,7 @@ typedef struct {
     || (CurrentTag == 22)) {    /* DefineShape2 */
         RGB Color;
     }
-    else {              /* DefineShape3 */
+    else {              /* DefineShape3 or DefineShape4 */
         RGBA Color;
     }
 } LINESTYLE;
@@ -919,7 +935,7 @@ typedef struct {
     ubyte HasFillFlag       : 1;
     ubyte NoHScaleFlag      : 1;
     ubyte NoVScaleFlag      : 1;
-    ubyte PixelHintingFlag      : 1;
+    ubyte PixelHintingFlag  : 1;
     ubyte Reserved          : 5;
     ubyte NoClose           : 1;
     ubyte EndCapStyle       : 2;
@@ -1109,12 +1125,28 @@ typedef struct {
 } MORPHGRADRECORD;
 
 typedef struct {
-    local ushort i;
-    ubyte NumGradients;
+    // Despite of documentation (UI8 1-8), there are two fields
+    // spreadMode and interPolationMode which are same as in GRADIENT
+    local short i;
+    ubyte SpreadMode        : 2;
+    ubyte InterpolationMode : 2;
+    ubyte NumGradients      : 4;    
     for (i=0; i<NumGradients; i++) {
         MORPHGRADRECORD GradientRecords;
     }
 } MORPHGRADIENT;
+
+typedef struct {
+    local short i;
+    ubyte SpreadMode        : 2;
+    ubyte InterpolationMode : 2;
+    ubyte NumGradients      : 4;    
+    for (i=0; i<NumGradients; i++) {
+        MORPHGRADRECORD GradientRecords;
+    }
+    FIXED8 StartFocalPoint;
+    FIXED8 EndFocalPoint;
+} MORPHFOCALGRADIENT;
 
 typedef struct {
     ubyte FillStyleType;
@@ -1129,17 +1161,23 @@ typedef struct {
             MATRIX EndGradientMatrix;
             MORPHGRADIENT Gradient;
             break;
+        case 0x13:
+            MATRIX StartGradientMatrix;
+            MATRIX EndGradientMatrix;
+            MORPHFOCALGRADIENT Gradient;
+            break;
         case 0x40:
         case 0x41:
         case 0x42:
         case 0x43:
+            ushort BitmapId;
             MATRIX StartBitmapMatrix;
             MATRIX EndBitmapMatrix;
             break;
         default:
             break;
     }
-} MORPHFILLSTYLE;
+} MORPHFILLSTYLE <read=GetFillStyleType(this.FillStyleType)>;
 
 typedef struct {
     ushort StartWidth;
@@ -1339,7 +1377,1301 @@ typedef struct {
     LittleEndian();
 } KERNINGRECORD;
 
+typedef struct {
+    FLOAT16 AlignmentCoordinate;
+    FLOAT16 Range;
+} ZONEDATA;
 
+typedef struct {
+    ubyte NumZoneData;
+    ZONEDATA ZoneData[NumZoneData];
+    ubyte Reserved  : 6;
+    ubyte ZoneMaskY : 1;
+    ubyte ZoneMaskX : 1;
+} ZONERECORD;
+
+
+local ubyte CurrentGlyphBits;
+local ubyte CurrentAdvanceBits;
+
+typedef struct {
+    uint GlyphIndex : CurrentGlyphBits;
+    int GlyphAdvance : CurrentAdvanceBits;
+} GLYPHENTRY;
+
+typedef struct {
+    ubyte TextRecordType       : 1;
+    ubyte StyleFlagsReserved   : 3;
+    ubyte StyleFlagsHasFont    : 1;
+    ubyte StyleFlagsHasColor   : 1;
+    ubyte StyleFlagsHasYOffset : 1;
+    ubyte StyleFlagsHasXOffset : 1;
+    if (TextRecordType) {
+        if (StyleFlagsHasFont) {
+            ushort FontID;           
+        }
+        if (StyleFlagsHasColor) {
+            if (CurrentTag == 33) { /* DefineText2 */
+                RGBA TextColor;
+            } else {
+                RGB TextColor;
+            }
+        }
+        if (StyleFlagsHasXOffset) {
+            short XOffset;            
+        }
+        if (StyleFlagsHasYOffset) {
+            short YOffset;            
+        }
+        if (StyleFlagsHasFont) {
+            ushort TextHeight;
+        }
+        ubyte GlyphCount;
+        BitfieldDisablePadding();
+        GLYPHENTRY GlyphEntries[GlyphCount] <optimize=false>;
+        BitfieldEnablePadding();
+    }
+} TEXTRECORD;
+
+
+string GetTextRecordName(TEXTRECORD &textRecord)
+{    
+    if (0 == textRecord.TextRecordType && 
+        0 == textRecord.StyleFlagsReserved &&
+        0 == textRecord.StyleFlagsHasFont &&
+        0 == textRecord.StyleFlagsHasColor &&
+        0 == textRecord.StyleFlagsHasYOffset &&
+        0 == textRecord.StyleFlagsHasXOffset
+    ) {
+        return "struct EndOfRecordsFlag";
+    }
+    return "struct TEXTRECORD TextRecords";
+}
+
+/****************
+ * AS3 ByteCode *
+ ****************/
+
+
+typedef struct {
+    BigEndian();
+    local int i=0;
+    local uint value = 0;
+    BitfieldDisablePadding();
+    do {
+        ubyte next       : 1;
+        uint valuePart      : 7;
+        value +=  valuePart << (i * 7);
+        i++;        
+    } while (i<5 & next);
+   BitfieldEnablePadding();
+} u32 <read=(value)>;
+
+typedef struct {
+    BigEndian();
+    local int i=0;
+    local uint value = 0;
+    BitfieldDisablePadding();
+    do {
+        ubyte next       : 1;
+        uint valuePart      : 7;
+        value +=  valuePart << (i * 7);
+        i++;        
+    } while (i<5 & next);
+   BitfieldEnablePadding();
+   value = value & 0x3FFFFFFF;
+} u30 <read=(value)>;
+
+typedef struct {
+    BigEndian();
+    local int i=0;
+    local uint value = 0;
+    BitfieldDisablePadding();
+    do {
+        ubyte next       : 1;
+        uint valuePart      : 7;
+        value += valuePart << (i * 7);
+        i++;        
+        
+    } while (i<5 & next);
+
+    if ((value >> 31) == 1) {
+        value = -(value & 0x7fffffff);
+    }
+
+   BitfieldEnablePadding();
+} s32 <read=(value)>;
+
+typedef unsigned short u16;
+typedef double d64;
+typedef unsigned byte u8;
+typedef signed byte s8;
+typedef unsigned byte decimal[16];
+typedef hfloat float4[4];
+
+typedef struct {
+    local int value;
+    ubyte val1;
+    ubyte val2;
+    ubyte val3;
+    value = val1 + ((uint)val2 << 8) + ((uint)val3 << 16);
+    
+    if ((value >> 23) == 1) {
+        value |= 0xff000000;
+    }
+} s24;
+
+
+local u16 abc_minor_version;
+local u16 abc_major_version;
+
+
+typedef struct {
+    u30 size;
+    if (size.value > 0) {
+        char utf8[size.value];
+    }
+} string_info <read=StringInfoFunc>;
+
+string StringInfoFunc(string_info &s) {
+    if (s.size.value == 0) {
+        return "";
+    }
+    return s.utf8;
+}
+
+
+typedef struct {
+    u8 kind <format=hex>;
+    u30 name;
+} namespace_info <read=GetNamespaceType>;
+
+string GetNamespaceType(namespace_info &namespace)
+{    
+    switch (namespace.kind) {
+        case 0x08: return "Namespace";
+        case 0x16: return "PackageNamespace";
+        case 0x17: return "PackageInternalNs";
+        case 0x18: return "ProtectedNamespace";
+        case 0x19: return "ExplicitNamespace";
+        case 0x1A: return "StaticProtectedNs";
+        case 0x05: return "PrivateNs";
+        default:   return Str("Unknown0x%02X", namespace.kind);
+    }
+}
+
+typedef struct {
+    u30 count;
+    u30 ns[count.value] <optimize=false>;
+} ns_set_info;
+
+typedef struct {
+    u8 kind <format=hex>;
+    switch (kind) {
+        case 0x07:      /* QName */
+        case 0x0D:      /* QNameA */
+            u30 ns;
+            u30 name;
+            break;
+        case 0x0F:      /* RTQName */
+        case 0x10:      /* RTQNameA */
+            u30 name;
+            break;
+        case 0x11:      /* RTQNameL */
+        case 0x12:      /* RTQNameLA */
+            //no data
+            break;
+        case 0x09:      /* Multiname */
+        case 0x0E:      /* MultinameA */
+            u30 name;
+            u30 ns_set;
+            break;
+        case 0x1B:      /* MultinameL */
+        case 0x1C:      /* MultinameLA */
+            u30 ns_set;
+            break;
+        case 0x1D:      /* TypeName */
+            u30 qname;
+            u30 params_length;
+            u30 param[params_length.value] <optimize=false>;
+            break;
+    }
+} multiname_info <read=GetMultinameType>;
+
+string GetMultinameType(multiname_info &multiname)
+{    
+    switch (multiname.kind) {
+        case 0x07: return "QName";
+        case 0x0D: return "QNameA";
+        case 0x0F: return "RTQName";
+        case 0x10: return "RTQNameA";
+        case 0x11: return "RTQNameL";
+        case 0x12: return "RTQNameLA";
+        case 0x09: return "Multiname";
+        case 0x0E: return "MultinameA";
+        case 0x1B: return "MultinameL";
+        case 0x1C: return "MultinameLA";
+        case 0x1D: return "TypeName";
+        default:   return Str("Unknown0x%02X", multiname.kind);
+    }
+}
+
+typedef struct {
+    u30 int_count;
+    if (int_count.value > 1) {
+        s32 integer[int_count.value - 1] <optimize=false>;
+    }
+    u30 uint_count;
+    if (uint_count.value > 1) {
+        u32 uinteger[uint_count.value - 1] <optimize=false>;
+    }
+    u30 double_count;
+    if (double_count.value > 1) {
+        d64 double_[double_count.value - 1];
+    }
+    if (abc_minor_version >= 17) {
+        u30 decimal_count;
+        if (decimal_count.value > 1) {
+            decimal decimal_[decimal_count.value - 1];
+        }
+    }
+    if (abc_major_version > 47 || (abc_major_version == 47 && abc_minor_version > 16)) {
+        u30 float_count;
+        if (float_count.value > 1) {
+            hfloat float_[float_count.value - 1];
+        }
+        u30 float4_count;
+        if (float4_count.value > 1) {
+            float4 float4_[float4_count.value - 1];
+        }
+    }
+    u30 string_count;
+    if (string_count.value > 1) {
+        string_info string_ [string_count.value - 1] <optimize=false>;
+    }
+    u30 namespace_count;
+    if (namespace_count.value > 1) {
+        namespace_info namespace[namespace_count.value - 1] <optimize=false>;
+    }
+    u30 ns_set_count;
+    if (ns_set_count.value > 1) {
+        ns_set_info ns_set[ns_set_count.value - 1] <optimize=false>;
+    }
+    u30 multiname_count;
+    if (multiname_count.value > 1) {
+        multiname_info multiname[multiname_count.value - 1] <optimize=false>;
+    }
+} cpool_info;
+
+typedef struct {
+    u30 val;
+    u8 kind <format=hex>;
+} option_detail <read=GetConstantType(kind)>;
+
+string GetConstantType(u8 kind)
+{    
+    switch (kind) {
+        case 0x03: return "CONSTANT_Int";
+        case 0x04: return "CONSTANT_UInt";
+        case 0x06: return "CONSTANT_Double";
+        case 0x01: return "CONSTANT_Utf8";
+        case 0x0B: return "CONSTANT_True";
+        case 0x0A: return "CONSTANT_False";
+        case 0x0C: return "CONSTANT_Null";
+        case 0x00: return "CONSTANT_Undefined";
+        case 0x08: return "CONSTANT_Namespace";
+        case 0x16: return "CONSTANT_PackageNamespace";
+        case 0x17: return "CONSTANT_PackageInternalNs";
+        case 0x18: return "CONSTANT_ProtectedNamespace";
+        case 0x19: return "CONSTANT_ExplicitNamespace";
+        case 0x1A: return "CONSTANT_StaticProtectedNs";
+        case 0x05: return "CONSTANT_PrivateNs";
+        default:   return Str("Unknown0x%02X", kind);
+    }
+}
+
+typedef struct {
+    u30 option_count;
+    option_detail option[option_count.value] <optimize=false>; 
+} option_info;
+
+typedef struct {
+    u30 param_count;
+    u30 return_type;
+    if (param_count.value > 0) {
+        u30 param_type[param_count.value] <optimize=false>;
+    }
+    u30 name;
+    BitfieldDisablePadding();
+    ubyte HAS_PARAM_NAMES : 1;
+    ubyte SET_DXNS        : 1;
+    ubyte reserved        : 2;
+    ubyte HAS_OPTIONAL    : 1;
+    ubyte NEED_REST       : 1;
+    ubyte NEED_ACTIVATION : 1;
+    ubyte NEED_ARGUMENTS  : 1;
+    BitfieldEnablePadding();    
+    if (HAS_OPTIONAL) {
+        option_info options;
+    }
+    if (HAS_PARAM_NAMES) {
+        struct param_info {
+            u30 param_name[param_count.value] <optimize=false>;
+        } param_names;
+    }
+} method_info;
+
+
+typedef struct {
+    u30 key;
+    u30 value;
+} item_info;
+
+typedef struct {
+    u30 name;
+    u30 item_count;
+    if (item_count.value > 0) {
+        item_info items[item_count.value] <optimize=false>;
+    }
+} metadata_info;
+
+typedef struct {
+    u30 name;    
+    
+    BitfieldDisablePadding();
+    ubyte reserved      : 1;
+    ubyte ATTR_Metadata : 1;
+    ubyte ATTR_Override : 1;
+    ubyte ATTR_Final    : 1;
+    ubyte kind_type : 4 <format=hex>;
+    BitfieldEnablePadding();
+    switch(kind_type) {
+        case 0x00:     /* Trait_Slot */
+        case 0x06:     /* Trait_Const */
+            u30 slot_id;
+            u30 type_name;
+            u30 vindex;
+            if (vindex.value != 0) {
+                u8 vkind;
+            }
+            break;
+        case 0x04:     /* Trait_Class*/
+            u30 slot_id;
+            u30 classi;
+            break;
+        case 0x05:     /* Trait_Function */
+            u30 slot_id;
+            u30 function;
+            break;
+        case 0x01:     /* Trait_Method */
+        case 0x02:     /* Trait_Getter */
+        case 0x03:     /* Trait_Setter */
+            u30 disp_id;
+            u30 method;
+            break;
+    }
+    if (ATTR_Metadata) {
+        u30 metadata_count;
+        u30 metadata[metadata_count.value] <optimize=false>;
+    }
+} traits_info <read=GetTraitType>;
+
+string GetTraitType(traits_info &trait)
+{    
+    switch (trait.kind_type) {
+        case 0x00: return "Trait_Slot";
+        case 0x06: return "Trait_Const";
+        case 0x04: return "Trait_Class";
+        case 0x05: return "Trait_Function";
+        case 0x01: return "Trait_Method";
+        case 0x02: return "Trait_Getter";
+        case 0x03: return "Trait_Setter";
+        default:   return Str("Unknown0x%02X", trait.kind_type);
+    }
+}
+
+typedef struct {
+    u30 name;
+    u30 super_name;
+    BigEndian();
+    BitfieldDisablePadding();
+    ubyte reserved         : 3;
+    ubyte ClassNonNullable : 1;
+    ubyte ClassProtectedNs : 1;
+    ubyte ClassInterface   : 1;
+    ubyte ClassFinal       : 1;
+    ubyte ClassSealed      : 1;
+    BitfieldEnablePadding();
+    if (ClassProtectedNs) {
+        u30 protectedNs;
+    }
+    u30 intrf_count;
+    if (intrf_count.value > 0) {
+        u30 interface[intrf_count.value] <optimize=false>;
+    }
+    u30 iinit;
+    u30 trait_count;
+    if (trait_count.value > 0) {
+        traits_info trait[trait_count.value] <optimize=false>;
+    }
+} instance_info;
+
+typedef struct {
+    u30 cinit;
+    u30 trait_count;
+    if (trait_count.value > 0) {
+        traits_info traits[trait_count.value] <optimize=false>;
+    }
+} class_info;
+
+typedef struct {
+    u30 init;
+    u30 trait_count;
+    if (trait_count.value > 0) {
+        traits_info trait[trait_count.value]  <optimize=false>;
+    }
+} script_info;
+
+typedef struct {
+    u30 from;
+    u30 to;
+    u30 target;
+    u30 exc_type;
+    u30 var_name;
+} exception_info;
+
+
+typedef struct {
+    u8 instruction <format=hex>;
+    switch(instruction) {
+        case 0x01:   /* bkpt */
+            break;
+        case 0x02:   /* nop */
+            break;
+        case 0x03:   /* throw */
+            break;
+        case 0x04:   /* getsuper */
+            u30 index;
+            break;
+        case 0x05:   /* setsuper */
+            u30 index;
+            break;
+        case 0x06:   /* dxns */
+            u30 index;
+            break;
+        case 0x07:   /* dxnslate */
+            break;
+        case 0x08:   /* kill */
+            u30 index;
+            break;
+        case 0x09:   /* label */
+            break;
+        case 0x0A:   /* lf32x4 */
+            break;
+        case 0x0B:   /* sf32x4 */
+            break;
+        case 0x0C:   /* ifnlt */
+            s24 offset;
+            break;
+        case 0x0D:   /* ifnle */
+            s24 offset;
+            break;
+        case 0x0E:   /* ifngt */
+            s24 offset;
+            break;
+        case 0x0F:   /* ifnge */
+            s24 offset;
+            break;
+        case 0x10:   /* jump */
+            s24 offset;
+            break;
+        case 0x11:   /* iftrue */
+            s24 offset;
+            break;
+        case 0x12:   /* iffalse */
+            s24 offset;
+            break;
+        case 0x13:   /* ifeq */
+            s24 offset;
+            break;
+        case 0x14:   /* ifne */
+            s24 offset;
+            break;
+        case 0x15:   /* iflt */
+            s24 offset;
+            break;
+        case 0x16:   /* ifle */
+            s24 offset;
+            break;
+        case 0x17:   /* ifgt */
+            s24 offset;
+            break;
+        case 0x18:   /* ifge */
+            s24 offset;
+            break;
+        case 0x19:   /* ifstricteq */
+            s24 offset;
+            break;
+        case 0x1A:   /* ifstrictne */
+            s24 offset;
+            break;
+        case 0x1B:   /* lookupswitch */
+            s24 default_offset;
+            u30 case_count;
+            s24 case_offset[case_count.value + 1] <optimize=false>;
+            break;
+        case 0x1C:   /* pushwith */
+            break;
+        case 0x1D:   /* popscope */
+            break;
+        case 0x1E:   /* nextname */
+            break;
+        case 0x1F:   /* hasnext */
+            break;
+        case 0x20:   /* pushnull */
+            break;
+        case 0x21:   /* pushundefined */
+            break;
+        case 0x22:   /* pushconstant */
+            u30 value;
+            break;
+        case 0x23:   /* nextvalue */
+            break;
+        case 0x24:   /* pushbyte */
+            s8 value;
+            break;
+        case 0x25:   /* pushshort */
+            u30 value;
+            break;
+        case 0x26:   /* pushtrue */
+            break;
+        case 0x27:   /* pushfalse */
+            break;
+        case 0x28:   /* pushnan */
+            break;
+        case 0x29:   /* pop */
+            break;
+        case 0x2A:   /* dup */
+            break;
+        case 0x2B:   /* swap */
+            break;
+        case 0x2C:   /* pushstring */
+            u30 value;
+            break;
+        case 0x2D:   /* pushint */
+            u30 value;
+            break;
+        case 0x2E:   /* pushuint */
+            u30 value;
+            break;
+        case 0x2F:   /* pushdouble */
+            u30 value;
+            break;
+        case 0x30:   /* pushscope */
+            break;
+        case 0x31:   /* pushnamespace */
+            u30 value;
+            break;
+        case 0x32:   /* hasnext2 */
+            u30 object_reg;
+            u30 index_reg;
+            break;
+        case 0x33:   /* pushdecimal */
+            u30 value;
+            break;
+        case 0x34:   /* pushdnan */
+            break;
+        case 0x35:   /* li8 */
+            break;
+        case 0x36:   /* li16 */
+            break;
+        case 0x37:   /* li32 */
+            break;
+        case 0x38:   /* lf32 */
+            break;
+        case 0x39:   /* lf64 */
+            break;
+        case 0x3A:   /* si8 */
+            break;
+        case 0x3B:   /* si16 */
+            break;
+        case 0x3C:   /* si32 */
+            break;
+        case 0x3D:   /* sf32 */
+            break;
+        case 0x3E:   /* sf64 */
+            break;
+        case 0x40:   /* newfunction */
+            u30 index;
+            break;
+        case 0x41:   /* call */
+            u30 arg_count;
+            break;
+        case 0x42:   /* construct */
+            u30 arg_count;
+            break;
+        case 0x43:   /* callmethod */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x44:   /* callstatic */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x45:   /* callsuper */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x46:   /* callproperty */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x47:   /* returnvoid */
+            break;
+        case 0x48:   /* returnvalue */
+            break;
+        case 0x49:   /* constructsuper */
+            u30 arg_count;
+            break;
+        case 0x4A:   /* constructprop */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x4C:   /* callproplex */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x4D:   /* callinterface */
+            u30 index;
+            break;
+        case 0x4E:   /* callsupervoid */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x4F:   /* callpropvoid */
+            u30 index;
+            u30 arg_count;
+            break;
+        case 0x50:   /* sxi1 */
+            break;
+        case 0x51:   /* sxi8 */
+            break;
+        case 0x52:   /* sxi16 */
+            break;
+        case 0x53:   /* applytype */
+            u30 arg_count;
+            break;
+        case 0x54:   /* pushfloat4 */
+            u30 value;
+            break;
+        case 0x55:   /* newobject */
+            u30 arg_count;
+            break;
+        case 0x56:   /* newarray */
+            u30 arg_count;
+            break;
+        case 0x57:   /* newactivation */
+            break;
+        case 0x58:   /* newclass */
+            u30 index;
+            break;
+        case 0x59:   /* getdescendants */
+            u30 index;
+            break;
+        case 0x5A:   /* newcatch */
+            u30 index;
+            break;
+        case 0x5B:   /* deldescendants */
+            u30 index;
+            break;
+        case 0x5C:   /* findpropglobal */
+            u30 index;
+            break;
+        case 0x5D:   /* findpropstrict */
+            u30 index;
+            break;
+        case 0x5E:   /* findproperty */
+            u30 index;
+            break;
+        case 0x5F:   /* finddef */
+            u30 index;
+            break;
+        case 0x60:   /* getlex */
+            u30 index;
+            break;
+        case 0x61:   /* setproperty */
+            u30 index;
+            break;
+        case 0x62:   /* getlocal */
+            u30 index;
+            break;
+        case 0x63:   /* setlocal */
+            u30 index;
+            break;
+        case 0x64:   /* getglobalscope */
+            break;
+        case 0x65:   /* getscopeobject */
+            u30 index;
+            break;
+        case 0x66:   /* getproperty */
+            u30 index;
+            break;
+        case 0x67:   /* getouterscope */
+            u30 index;
+            break;
+        case 0x68:   /* initproperty */
+            u30 index;
+            break;
+        case 0x6A:   /* deleteproperty */
+            u30 index;
+            break;
+        case 0x6B:   /* deletepropertylate */
+            break;
+        case 0x6C:   /* getslot */
+            u30 slotindex;
+            break;
+        case 0x6D:   /* setslot */
+            u30 slotindex;
+            break;
+        case 0x6E:   /* getglobalslot */
+            u30 slotindex;
+            break;
+        case 0x6F:   /* setglobalslot */
+            u30 slotindex;
+            break;
+        case 0x70:   /* convert_s */
+            break;
+        case 0x71:   /* esc_xelem */
+            break;
+        case 0x72:   /* esc_xattr */
+            break;
+        case 0x73:   /* convert_i */
+            break;
+        case 0x74:   /* convert_u */
+            break;
+        case 0x75:   /* convert_d */
+            break;
+        case 0x76:   /* convert_b */
+            break;
+        case 0x77:   /* convert_o */
+            break;
+        case 0x78:   /* checkfilter */
+            break;
+        case 0x79:   /* convert_f */
+            break;
+        case 0x7A:   /* unplus */
+            break;
+        case 0x7B:   /* convert_f4 */
+            break;
+        case 0x80:   /* coerce */
+            u30 index;
+            break;
+        case 0x81:   /* coerce_b */
+            break;
+        case 0x82:   /* coerce_a */
+            break;
+        case 0x83:   /* coerce_i */
+            break;
+        case 0x84:   /* coerce_d */
+            break;
+        case 0x85:   /* coerce_s */
+            break;
+        case 0x86:   /* astype */
+            u30 index;
+            break;
+        case 0x87:   /* astypelate */
+            break;
+        case 0x88:   /* coerce_u */
+            break;
+        case 0x89:   /* coerce_o */
+            break;
+        case 0x8F:   /* negate_p */
+            u30 number_context;
+            break;
+        case 0x90:   /* negate */
+            break;
+        case 0x91:   /* increment */
+            break;
+        case 0x92:   /* inclocal */
+            u30 index;
+            break;
+        case 0x93:   /* decrement */
+            break;
+        case 0x94:   /* declocal */
+            u30 index;
+            break;
+        case 0x95:   /* typeof */
+            break;
+        case 0x96:   /* not */
+            break;
+        case 0x97:   /* bitnot */
+            break;
+        case 0x9C:   /* increment_p */
+            u30 number_context;
+            break;
+        case 0x9D:   /* inclocal_p */
+            u30 number_context;
+            u30 index;
+            break;
+        case 0x9E:   /* decrement_p */
+            u30 number_context;
+            break;
+        case 0x9F:   /* declocal_p */
+            u30 number_context;
+            u30 index;
+            break;
+        case 0xA0:   /* add */
+            break;
+        case 0xA1:   /* subtract */
+            break;
+        case 0xA2:   /* multiply */
+            break;
+        case 0xA3:   /* divide */
+            break;
+        case 0xA4:   /* modulo */
+            break;
+        case 0xA5:   /* lshift */
+            break;
+        case 0xA6:   /* rshift */
+            break;
+        case 0xA7:   /* urshift */
+            break;
+        case 0xA8:   /* bitand */
+            break;
+        case 0xA9:   /* bitor */
+            break;
+        case 0xAA:   /* bitxor */
+            break;
+        case 0xAB:   /* equals */
+            break;
+        case 0xAC:   /* strictequals */
+            break;
+        case 0xAD:   /* lessthan */
+            break;
+        case 0xAE:   /* lessequals */
+            break;
+        case 0xAF:   /* greaterthan */
+            break;
+        case 0xB0:   /* greaterequals */
+            break;
+        case 0xB1:   /* instanceof */
+            break;
+        case 0xB2:   /* istype */
+            u30 index;
+            break;
+        case 0xB3:   /* istypelate */
+            break;
+        case 0xB4:   /* in */
+            break;
+        case 0xB5:   /* add_p */
+            u30 number_context;
+            break;
+        case 0xB6:   /* subtract_p */
+            u30 number_context;
+            break;
+        case 0xB7:   /* multiply_p */
+            u30 number_context;
+            break;
+        case 0xB8:   /* divide_p */
+            u30 number_context;
+            break;
+        case 0xB9:   /* modulo_p */
+            u30 number_context;
+            break;
+        case 0xC0:   /* increment_i */
+            break;
+        case 0xC1:   /* decrement_i */
+            break;
+        case 0xC2:   /* inclocal_i */
+            u30 index;
+            break;
+        case 0xC3:   /* declocal_i */
+            u30 index;
+            break;
+        case 0xC4:   /* negate_i */
+            break;
+        case 0xC5:   /* add_i */
+            break;
+        case 0xC6:   /* subtract_i */
+            break;
+        case 0xC7:   /* multiply_i */
+            break;
+        case 0xD0:   /* getlocal0 */
+            break;
+        case 0xD1:   /* getlocal1 */
+            break;
+        case 0xD2:   /* getlocal2 */
+            break;
+        case 0xD3:   /* getlocal3 */
+            break;
+        case 0xD4:   /* setlocal0 */
+            break;
+        case 0xD5:   /* setlocal1 */
+            break;
+        case 0xD6:   /* setlocal2 */
+            break;
+        case 0xD7:   /* setlocal3 */
+            break;
+        case 0xEF:   /* debug */
+            u8 debug_type;
+            u30 index;
+            u8 reg;
+            u30 extra;
+            break;
+        case 0xF0:   /* debugline */
+            u30 linenum;
+            break;
+        case 0xF1:   /* debugfile */
+            u30 index;
+            break;
+        case 0xF2:   /* bkptline */
+            u30 linenum;
+            break;
+        case 0xF3:   /* timestamp */
+            break;
+        case 0x00:
+        case 0x3F:
+        case 0x4B:   /* callsuperid */
+        case 0x69:   /* setpropertylate */
+        case 0x7C:
+        case 0x7D:
+        case 0x7E:
+        case 0x7F:
+        case 0x8A:
+        case 0x8B:
+        case 0x8C:
+        case 0x8D:
+        case 0x8E:
+        case 0x98:
+        case 0x99:
+        case 0x9A:   /* concat */
+        case 0x9B:   /* add_d */
+        case 0xBA:
+        case 0xBB:
+        case 0xBC:
+        case 0xBD:
+        case 0xBE:
+        case 0xBF:
+        case 0xC8:
+        case 0xC9:
+        case 0xCA:
+        case 0xCB:
+        case 0xCC:
+        case 0xCD:
+        case 0xCE:
+        case 0xCF:
+        case 0xD8:
+        case 0xD9:
+        case 0xDA:
+        case 0xDB:
+        case 0xDC:
+        case 0xDD:
+        case 0xDE:
+        case 0xDF:
+        case 0xE0:
+        case 0xE1:
+        case 0xE2:
+        case 0xE3:
+        case 0xE4:
+        case 0xE5:
+        case 0xE6:
+        case 0xE7:
+        case 0xE8:
+        case 0xE9:
+        case 0xEA:
+        case 0xEB:
+        case 0xEC:
+        case 0xED:   /* invalid */
+        case 0xEE:   /* abs_jump */
+        case 0xF4:
+        case 0xF5:   /* verifypass */
+        case 0xF6:   /* alloc */
+        case 0xF7:   /* mark */
+        case 0xF8:   /* wb */
+        case 0xF9:   /* prologue */
+        case 0xFA:   /* sendenter */
+        case 0xFB:   /* doubletoatom */
+        case 0xFC:   /* sweep */
+        case 0xFD:   /* codegenop */
+        case 0xFE:   /* verifyop */
+        case 0xFF:   /* decode */
+            Printf("UNKNOWN avm2 instruction: 0x%02X\n", instruction);
+            break;
+    }
+} avm2_instruction <read=GetInstructionName>;
+
+
+string GetInstructionName(avm2_instruction &instruction)
+{    
+    switch (instruction.instruction) {
+        case 0x01: return "bkpt";
+        case 0x02: return "nop";
+        case 0x03: return "throw";
+        case 0x04: return "getsuper";
+        case 0x05: return "setsuper";
+        case 0x06: return "dxns";
+        case 0x07: return "dxnslate";
+        case 0x08: return "kill";
+        case 0x09: return "label";
+        case 0x0A: return "lf32x4";
+        case 0x0B: return "sf32x4";
+        case 0x0C: return "ifnlt";
+        case 0x0D: return "ifnle";
+        case 0x0E: return "ifngt";
+        case 0x0F: return "ifnge";
+        case 0x10: return "jump";
+        case 0x11: return "iftrue";
+        case 0x12: return "iffalse";
+        case 0x13: return "ifeq";
+        case 0x14: return "ifne";
+        case 0x15: return "iflt";
+        case 0x16: return "ifle";
+        case 0x17: return "ifgt";
+        case 0x18: return "ifge";
+        case 0x19: return "ifstricteq";
+        case 0x1A: return "ifstrictne";
+        case 0x1B: return "lookupswitch";
+        case 0x1C: return "pushwith";
+        case 0x1D: return "popscope";
+        case 0x1E: return "nextname";
+        case 0x1F: return "hasnext";
+        case 0x20: return "pushnull";
+        case 0x21: return "pushundefined";
+        case 0x22: return "pushconstant";
+        case 0x23: return "nextvalue";
+        case 0x24: return "pushbyte";
+        case 0x25: return "pushshort";
+        case 0x26: return "pushtrue";
+        case 0x27: return "pushfalse";
+        case 0x28: return "pushnan";
+        case 0x29: return "pop";
+        case 0x2A: return "dup";
+        case 0x2B: return "swap";
+        case 0x2C: return "pushstring";
+        case 0x2D: return "pushint";
+        case 0x2E: return "pushuint";
+        case 0x2F: return "pushdouble";
+        case 0x30: return "pushscope";
+        case 0x31: return "pushnamespace";
+        case 0x32: return "hasnext2";
+        case 0x33: return "pushdecimal";
+        case 0x34: return "pushdnan";
+        case 0x35: return "li8";
+        case 0x36: return "li16";
+        case 0x37: return "li32";
+        case 0x38: return "lf32";
+        case 0x39: return "lf64";
+        case 0x3A: return "si8";
+        case 0x3B: return "si16";
+        case 0x3C: return "si32";
+        case 0x3D: return "sf32";
+        case 0x3E: return "sf64";
+        case 0x40: return "newfunction";
+        case 0x41: return "call";
+        case 0x42: return "construct";
+        case 0x43: return "callmethod";
+        case 0x44: return "callstatic";
+        case 0x45: return "callsuper";
+        case 0x46: return "callproperty";
+        case 0x47: return "returnvoid";
+        case 0x48: return "returnvalue";
+        case 0x49: return "constructsuper";
+        case 0x4A: return "constructprop";
+        case 0x4B: return "callsuperid";
+        case 0x4C: return "callproplex";
+        case 0x4D: return "callinterface";
+        case 0x4E: return "callsupervoid";
+        case 0x4F: return "callpropvoid";
+        case 0x50: return "sxi1";
+        case 0x51: return "sxi8";
+        case 0x52: return "sxi16";
+        case 0x53: return "applytype";
+        case 0x54: return "pushfloat4";
+        case 0x55: return "newobject";
+        case 0x56: return "newarray";
+        case 0x57: return "newactivation";
+        case 0x58: return "newclass";
+        case 0x59: return "getdescendants";
+        case 0x5A: return "newcatch";
+        case 0x5B: return "deldescendants";
+        case 0x5C: return "findpropglobal";
+        case 0x5D: return "findpropstrict";
+        case 0x5E: return "findproperty";
+        case 0x5F: return "finddef";
+        case 0x60: return "getlex";
+        case 0x61: return "setproperty";
+        case 0x62: return "getlocal";
+        case 0x63: return "setlocal";
+        case 0x64: return "getglobalscope";
+        case 0x65: return "getscopeobject";
+        case 0x66: return "getproperty";
+        case 0x67: return "getouterscope";
+        case 0x68: return "initproperty";
+        case 0x69: return "setpropertylate";
+        case 0x6A: return "deleteproperty";
+        case 0x6B: return "deletepropertylate";
+        case 0x6C: return "getslot";
+        case 0x6D: return "setslot";
+        case 0x6E: return "getglobalslot";
+        case 0x6F: return "setglobalslot";
+        case 0x70: return "convert_s";
+        case 0x71: return "esc_xelem";
+        case 0x72: return "esc_xattr";
+        case 0x73: return "convert_i";
+        case 0x74: return "convert_u";
+        case 0x75: return "convert_d";
+        case 0x76: return "convert_b";
+        case 0x77: return "convert_o";
+        case 0x78: return "checkfilter";
+        case 0x79: return "convert_f";
+        case 0x7A: return "unplus";
+        case 0x7B: return "convert_f4";
+        case 0x80: return "coerce";
+        case 0x81: return "coerce_b";
+        case 0x82: return "coerce_a";
+        case 0x83: return "coerce_i";
+        case 0x84: return "coerce_d";
+        case 0x85: return "coerce_s";
+        case 0x86: return "astype";
+        case 0x87: return "astypelate";
+        case 0x88: return "coerce_u";
+        case 0x89: return "coerce_o";
+        case 0x8F: return "negate_p";
+        case 0x90: return "negate";
+        case 0x91: return "increment";
+        case 0x92: return "inclocal";
+        case 0x93: return "decrement";
+        case 0x94: return "declocal";
+        case 0x95: return "typeof";
+        case 0x96: return "not";
+        case 0x97: return "bitnot";
+        case 0x9A: return "concat";
+        case 0x9B: return "add_d";
+        case 0x9C: return "increment_p";
+        case 0x9D: return "inclocal_p";
+        case 0x9E: return "decrement_p";
+        case 0x9F: return "declocal_p";
+        case 0xA0: return "add";
+        case 0xA1: return "subtract";
+        case 0xA2: return "multiply";
+        case 0xA3: return "divide";
+        case 0xA4: return "modulo";
+        case 0xA5: return "lshift";
+        case 0xA6: return "rshift";
+        case 0xA7: return "urshift";
+        case 0xA8: return "bitand";
+        case 0xA9: return "bitor";
+        case 0xAA: return "bitxor";
+        case 0xAB: return "equals";
+        case 0xAC: return "strictequals";
+        case 0xAD: return "lessthan";
+        case 0xAE: return "lessequals";
+        case 0xAF: return "greaterthan";
+        case 0xB0: return "greaterequals";
+        case 0xB1: return "instanceof";
+        case 0xB2: return "istype";
+        case 0xB3: return "istypelate";
+        case 0xB4: return "in";
+        case 0xB5: return "add_p";
+        case 0xB6: return "subtract_p";
+        case 0xB7: return "multiply_p";
+        case 0xB8: return "divide_p";
+        case 0xB9: return "modulo_p";
+        case 0xC0: return "increment_i";
+        case 0xC1: return "decrement_i";
+        case 0xC2: return "inclocal_i";
+        case 0xC3: return "declocal_i";
+        case 0xC4: return "negate_i";
+        case 0xC5: return "add_i";
+        case 0xC6: return "subtract_i";
+        case 0xC7: return "multiply_i";
+        case 0xD0: return "getlocal0";
+        case 0xD1: return "getlocal1";
+        case 0xD2: return "getlocal2";
+        case 0xD3: return "getlocal3";
+        case 0xD4: return "setlocal0";
+        case 0xD5: return "setlocal1";
+        case 0xD6: return "setlocal2";
+        case 0xD7: return "setlocal3";
+        case 0xED: return "invalid";
+        case 0xEE: return "abs_jump";
+        case 0xEF: return "debug";
+        case 0xF0: return "debugline";
+        case 0xF1: return "debugfile";
+        case 0xF2: return "bkptline";
+        case 0xF3: return "timestamp";
+        case 0xF5: return "verifypass";
+        case 0xF6: return "alloc";
+        case 0xF7: return "mark";
+        case 0xF8: return "wb";
+        case 0xF9: return "prologue";
+        case 0xFA: return "sendenter";
+        case 0xFB: return "doubletoatom";
+        case 0xFC: return "sweep";
+        case 0xFD: return "codegenop";
+        case 0xFE: return "verifyop";
+        case 0xFF: return "decode"; 
+        default:   return Str("unknown0x%02X", instruction.instruction);
+    }
+}
+
+typedef struct {
+    u30 code_length;
+    local quad code_start=FTell();
+    while (FTell() < code_start + code_length.value) {
+        avm2_instruction instruction;
+    }
+} avm2_code;
+
+typedef struct {
+    u30 method;
+    u30 max_stack;
+    u30 local_count;
+    u30 init_scope_depth;
+    u30 max_scope_depth;    
+    //u8 code[code_length.value];
+    avm2_code code;
+    u30 exception_count;
+    if (exception_count.value > 0) {
+        exception_info exception[exception_count.value] <optimize=false>;
+    }
+    u30 trait_count;
+    if (trait_count.value > 0) {
+        traits_info trait[trait_count.value] <optimize=false>;
+    }
+} method_body_info;
+
+
+
+typedef struct {
+    u16 minor_version;
+    u16 major_version;    
+    abc_minor_version = minor_version;
+    abc_major_version = major_version;
+
+    cpool_info constant_pool;
+    u30 method_count;
+    if (method_count.value > 0) {
+        method_info method[method_count.value] <optimize=false>;
+    }
+    u30 metadata_count;
+    if (metadata_count.value > 0) {
+        metadata_info metadata[metadata_count.value] <optimize=false>;
+    }
+    u30 class_count;
+    if (class_count.value > 0) {
+        instance_info instance[class_count.value] <optimize=false>;
+        class_info class[class_count.value] <optimize=false>;
+    }    
+    u30 script_count;
+    if (script_count.value > 0) {
+        script_info script[script_count.value] <optimize=false>;
+    }
+    u30 method_body_count;
+    if (method_body_count.value > 0) {
+        method_body_info method_body[method_body_count.value] <optimize=false>;
+    }
+} abcFile;
 
 
 /************
@@ -1348,12 +2680,16 @@ typedef struct {
 
 typedef struct {
     BitfieldEnablePadding();
+    LittleEndian();    
     ushort TagType      : 10;
     ushort TagLength    : 6;
     if (TagLength==0x3F) {
         int Length;
     }
 } RECORDHEADER;
+
+struct SWFTAG;
+
 
 typedef struct {
     local int i;
@@ -1380,8 +2716,13 @@ typedef struct {
                 ACTIONRECORD ActionTag;
             } while (ActionTag.ActionCode!=0x00);
             break;
-        case 82:            /* DoABC */
-            ubyte ByteCode[SWFTagEnd - FTell()];
+        case 72:            /* DoABC */
+            abcFile ABCData;
+            break;
+        case 82:            /* DoABC2 */
+            uint Flags;
+            string Name;
+            abcFile ABCData; 
             break;
 
 
@@ -1402,14 +2743,14 @@ typedef struct {
             }
             break;
         case 26:            /* PlaceObject2 */
-            ubyte PlaceFlagHasClipActions       : 1;
-            ubyte PlaceFlagHasClipDepth     : 1;
-            ubyte PlaceFlagHasName          : 1;
-            ubyte PlaceFlagHasRatio         : 1;
-            ubyte PlaceFlagHasColorTransform    : 1;
-            ubyte PlaceFlagHasMatrix        : 1;
-            ubyte PlaceFlagHasCharacter     : 1;
-            ubyte PlaceFlagMove         : 1;
+            ubyte PlaceFlagHasClipActions    : 1;
+            ubyte PlaceFlagHasClipDepth      : 1;
+            ubyte PlaceFlagHasName           : 1;
+            ubyte PlaceFlagHasRatio          : 1;
+            ubyte PlaceFlagHasColorTransform : 1;
+            ubyte PlaceFlagHasMatrix         : 1;
+            ubyte PlaceFlagHasCharacter      : 1;
+            ubyte PlaceFlagMove              : 1;
             ushort Depth;
             if (PlaceFlagHasCharacter) ushort CharacterId;
             if (PlaceFlagHasMatrix) MATRIX Matrix;
@@ -1421,18 +2762,20 @@ typedef struct {
             break;
         case 70:            /* PlaceObject3 */
             ubyte PlaceFlagHasClipActions       : 1;
-            ubyte PlaceFlagHasClipDepth     : 1;
-            ubyte PlaceFlagHasName          : 1;
-            ubyte PlaceFlagHasRatio         : 1;
+            ubyte PlaceFlagHasClipDepth         : 1;
+            ubyte PlaceFlagHasName              : 1;
+            ubyte PlaceFlagHasRatio             : 1;
             ubyte PlaceFlagHasColorTransform    : 1;
-            ubyte PlaceFlagHasMatrix        : 1;
-            ubyte PlaceFlagHasCharacter     : 1;
-            ubyte PlaceFlagMove         : 1;
-            ubyte Reserved              : 3;
-            ubyte PlaceFlagHasImage         : 1;
-            ubyte PlaceFlagHasClassName     : 1;
+            ubyte PlaceFlagHasMatrix            : 1;
+            ubyte PlaceFlagHasCharacter         : 1;
+            ubyte PlaceFlagMove                 : 1;           
+            ubyte Reserved                  : 1;
+            ubyte PlaceFlagOpaqueBackground     : 1;
+            ubyte PlaceFlagHasVisible           : 1;
+            ubyte PlaceFlagHasImage             : 1;
+            ubyte PlaceFlagHasClassName         : 1;
             ubyte PlaceFlagHasCacheAsBitmap     : 1;
-            ubyte PlaceFlagHasBlendMode     : 1;
+            ubyte PlaceFlagHasBlendMode         : 1;
             ubyte PlaceFlagHasFilterList        : 1;
             ushort Depth;
             if (PlaceFlagHasClassName
@@ -1460,8 +2803,76 @@ typedef struct {
             if (PlaceFlagHasBlendMode) {
                 ubyte BlendMode;
             }
+            if (PlaceFlagHasCacheAsBitmap) {
+                ubyte BitmapCache;
+            }
+            if (PlaceFlagHasVisible) {
+                ubyte Visible;
+            }
+            if (PlaceFlagOpaqueBackground) {
+                RGBA BackgroundColor;
+            }
             if (PlaceFlagHasClipActions) {
                 CLIPACTIONS ClipActions;
+            }
+            break;
+        case 94:            /* PlaceObject4 */
+            ubyte PlaceFlagHasClipActions       : 1;
+            ubyte PlaceFlagHasClipDepth         : 1;
+            ubyte PlaceFlagHasName              : 1;
+            ubyte PlaceFlagHasRatio             : 1;
+            ubyte PlaceFlagHasColorTransform    : 1;
+            ubyte PlaceFlagHasMatrix            : 1;
+            ubyte PlaceFlagHasCharacter         : 1;
+            ubyte PlaceFlagMove                 : 1;           
+            ubyte Reserved                  : 1;
+            ubyte PlaceFlagOpaqueBackground     : 1;
+            ubyte PlaceFlagHasVisible           : 1;
+            ubyte PlaceFlagHasImage             : 1;
+            ubyte PlaceFlagHasClassName         : 1;
+            ubyte PlaceFlagHasCacheAsBitmap     : 1;
+            ubyte PlaceFlagHasBlendMode         : 1;
+            ubyte PlaceFlagHasFilterList        : 1;
+            ushort Depth;
+            if (PlaceFlagHasClassName
+            || (PlaceFlagHasImage && PlaceFlagHasCharacter)) {
+                string ClassName;
+            }
+            if (PlaceFlagHasCharacter) {
+                ushort CharacterId;
+            }
+            if (PlaceFlagHasMatrix) {
+                MATRIX Matrix;
+            }
+            if (PlaceFlagHasColorTransform) {
+                CXFORMWITHALPHA ColorTransform;
+            }
+            if (PlaceFlagHasRatio) {
+                ushort Ratio;
+            }
+            if (PlaceFlagHasName) {
+                string Name;
+            }
+            if (PlaceFlagHasFilterList) {
+                FILTERLIST SurfaceFilterList;
+            }
+            if (PlaceFlagHasBlendMode) {
+                ubyte BlendMode;
+            }
+            if (PlaceFlagHasCacheAsBitmap) {
+                ubyte BitmapCache;
+            }
+            if (PlaceFlagHasVisible) {
+                ubyte Visible;
+            }
+            if (PlaceFlagOpaqueBackground) {
+                RGBA BackgroundColor;
+            }
+            if (PlaceFlagHasClipActions) {
+                CLIPACTIONS ClipActions;
+            }
+            if ((SWFTagEnd-FTell())>0) {
+                ubyte AmfData[SWFTagEnd-FTell()]; //TODO: parse AMF metadata
             }
             break;
         case 5:             /* RemoveObject */
@@ -1523,12 +2934,20 @@ typedef struct {
             ushort TabIndex;
             break;
         case 69:            /* FileAttributes */
-            uint Reserved       : 3;
-            uint HasMetadata    : 1;
-            uint ActionScript3  : 1;
-            uint Reserved2      : 2;
-            uint UseNetwork     : 1;
-            uint Reserved3      : 24;
+            BigEndian();
+            BitfieldDisablePadding();
+            uint Reserved           : 1;
+            uint UseDirectBlit      : 1;
+            uint UseGPU             : 1;
+            uint HasMetadata        : 1;
+            uint ActionScript3      : 1;
+            uint NoCrossDomainCache : 1;
+            uint SwfRelativeUrls    : 1;
+            uint UseNetwork         : 1;
+            uint Reserved2          : 24;
+            BitfieldEnablePadding();
+            LittleEndian();
+            
             break;
         case 71:            /* ImportAsset2 */
             string URL;
@@ -1554,9 +2973,16 @@ typedef struct {
             break;
         case 86:            /* DefineSceneAndFrameLabelData */
             EncodedU32 SceneCount;
-            if ((SWFTagEnd-FTell())>0) {
-                ubyte SceneAndFrameData[SWFTagEnd-FTell()];
-            }
+            struct OFFSETNAME {
+                EncodedU32 Offset;
+                string Name;
+            } OffsetName[SceneCount.value] <optimize=false>;
+            
+            EncodedU32 FrameLabelCount;
+            struct FRAMENUMLABEL {
+                EncodedU32 FrameNum;
+                string FrameLabel;
+            } FrameNumLabel[FrameLabelCount.value] <optimize=false>;;
             break;
 
 
@@ -1619,6 +3045,17 @@ typedef struct {
                 ubyte BitmapAlphaData[SWFTagEnd-FTell()];
             }
             break;
+        case 90:            /* DefineBitsJPEG4 */
+            ushort CharacterID;
+            uint AlphaDataOffset;
+            if (AlphaDataOffset) {
+                ubyte JPEGData[AlphaDataOffset];
+            }
+            ushort DeblockParam;
+            if ((SWFTagEnd-FTell())>0) {
+                ubyte BitmapAlphaData[SWFTagEnd-FTell()];
+            }
+            break;
         case 20:            /* DefineBitsLossless */
             ushort CharacterID;
             ubyte BitmapFormat;
@@ -1660,7 +3097,7 @@ typedef struct {
             SHAPE StartEdges;
             SHAPE EndEdges;
             break;
-        case 46:            /* DefineMorphShape2 */
+        case 84:            /* DefineMorphShape2 */
             ushort CharacterId;
             RECT StartBounds;
             RECT EndBounds;
@@ -1678,11 +3115,16 @@ typedef struct {
 
 
         /************************
-         *       Font Tags  *
+         *       Font Tags      *
          ************************/
         case 10:            /* DefineFont */
             ushort FontID;
-            ubyte Data[SWFTagEnd-FTell()];
+            if (SWFTagEnd-FTell()>0) {
+                ushort OffsetTable;
+                local ushort nGlyphs = OffsetTable / 2;
+                ushort OffsetTable[nGlyphs - 1];
+                SHAPE GlyphShapeTable[nGlyphs];
+            }            
             break;
         case 13:            /* DefineFontInfo */
             ushort FontID;
@@ -1693,8 +3135,8 @@ typedef struct {
             ubyte FontFlagsReserved     : 2;
             ubyte FontFlagsSmallText    : 1;
             ubyte FontFlagsShiftJIS     : 1;
-            ubyte FontFlagsANSI     : 1;
-            ubyte FontFlagsBold     : 1;
+            ubyte FontFlagsANSI         : 1;
+            ubyte FontFlagsBold         : 1;
             ubyte FontFlagsWideCodes    : 1;
             ubyte CodeTable[SWFTagEnd-FTell()];
             break;
@@ -1707,8 +3149,8 @@ typedef struct {
             ubyte FontFlagsReserved     : 2;
             ubyte FontFlagsSmallText    : 1;
             ubyte FontFlagsShiftJIS     : 1;
-            ubyte FontFlagsANSI     : 1;
-            ubyte FontFlagsBold     : 1;
+            ubyte FontFlagsANSI         : 1;
+            ubyte FontFlagsBold         : 1;
             ubyte FontFlagsWideCodes    : 1;
             LANGCODE LanguageCode;
             ubyte CodeTable[SWFTagEnd-FTell()];
@@ -1719,11 +3161,11 @@ typedef struct {
             ubyte FontFlagsHasLayout    : 1;
             ubyte FontFlagsShiftJIS     : 1;
             ubyte FontFlagsSmallText    : 1;
-            ubyte FontFlagsANSI     : 1;
+            ubyte FontFlagsANSI         : 1;
             ubyte FontFlagsWideOffsets  : 1;
             ubyte FontFlagsWideCodes    : 1;
             ubyte FontFlagsItalic       : 1;
-            ubyte FontFlagsBold     : 1;
+            ubyte FontFlagsBold         : 1;
             LANGCODE LanguageCode;
             ubyte FontNameLen;
             ubyte FontName[FontNameLen];
@@ -1767,12 +3209,23 @@ typedef struct {
                 }
             }
             break;
+        case 91:            /* DefineFont4 */
+            ushort FontID;
+            ubyte Reserved         : 5;
+            ubyte FontFlagsHasFontData  : 1;
+            ubyte FontFlagsItalic       : 1;
+            ubyte FontFlagsBold         : 1;
+            string FontName;
+            if ((SWFTagEnd-FTell())>0) {
+                ubyte FontData[SWFTagEnd-FTell()];
+            }
+            break;
         case 73:            /* DefineFontAlignZones */
             ushort FontID;
             ubyte CSMTableHint  : 2;
             ubyte Reserved      : 6;
-            if ((SWFTagEnd-FTell())>0) {
-                ubyte ZoneTable[SWFTagEnd-FTell()];
+            while ((SWFTagEnd-FTell())>0) {
+                ZONERECORD ZoneTable;
             }
             break;
         case 88:            /* DefineFontName */
@@ -1787,7 +3240,16 @@ typedef struct {
             MATRIX TextMatrix;
             ubyte GlyphBits;
             ubyte AdvanceBits;
-            ubyte TextRecords[SWFTagEnd-FTell()];
+            CurrentGlyphBits = GlyphBits;
+            CurrentAdvanceBits = AdvanceBits;
+            do {
+                TEXTRECORD TextRecords <name=GetTextRecordName>;
+            } while (TextRecords.TextRecordType ||
+                     TextRecords.StyleFlagsReserved ||
+                     TextRecords.StyleFlagsHasFont ||
+                     TextRecords.StyleFlagsHasColor ||
+                     TextRecords.StyleFlagsHasYOffset ||
+                     TextRecords.StyleFlagsHasXOffset);            
             break;
         case 37:            /* DefineEditText */
             ushort CharacterID;
@@ -1806,7 +3268,7 @@ typedef struct {
             ubyte NoSelect      : 1;
             ubyte Border        : 1;
             ubyte WasStatic     : 1;
-            ubyte HTML      : 1;
+            ubyte HTML          : 1;
             ubyte UseOutlines   : 1;
             if (HasFont) {
                 ushort FontID;
@@ -1921,16 +3383,19 @@ typedef struct {
             ushort ButtonId;
             ubyte ReservedFlags : 7;
             ubyte TrackAsMenu   : 1;
-            local quad off_end = FTell();
             ushort ActionOffset;
-            ubyte TODO[SWFTagEnd-FTell()]; // XXX
-            break;
-            while (FTell() < (off_end+ActionOffset)) {
-                BUTTONRECORD Character;
-            }
             do {
+                BUTTONRECORD Character;
+            } while (Character.ButtonReserved
+                || Character.ButtonHasBlendMode
+                || Character.ButtonHasFilterList
+                || Character.ButtonStateHitTest
+                || Character.ButtonStateDown
+                || Character.ButtonStateOver
+                || Character.ButtonStateUp);
+            while ((SWFTagEnd-FTell())>0) {
                 BUTTONCONDACTION Action;
-            } while ((SWFTagEnd-FTell())>1);
+            }
             break;
         case 23:            /* DefineButtonCxform */
             ushort ButtonId;
@@ -1963,7 +3428,24 @@ typedef struct {
         case 39:            /* DefineSprite */
             ushort SpriteID;
             ushort FrameCount;
-            ubyte Data[SWFTagEnd-FTell()];
+
+            local quad SpriteSWFTagEnd;
+            SpriteSWFTagEnd = SWFTagEnd;
+            
+            struct SWFTAGS {
+                if (SpriteSWFTagEnd-FTell() > 0) {
+                    do {
+                        SWFTAG Tag;
+                    } while ((SpriteSWFTagEnd-FTell() > 0) && Tag.Header.TagType != 0);                    
+                }
+            } ControlTags;
+
+            if (SpriteSWFTagEnd-FTell() > 0) {
+                ubyte RemainingData[SpriteSWFTagEnd-FTell()];
+            }
+
+            SWFTagEnd = SpriteSWFTagEnd;
+            CurrentTag = 39; 
             break;
 
 
@@ -2000,14 +3482,23 @@ typedef struct {
         /************************
          *   Undocumented Tags  *
          ************************/
-        case 41:            /* Serial Number */
-            if ((SWFTagEnd-FTell())>0) {
-                ubyte Data[SWFTagEnd-FTell()];
-            }
+        case 41:            /* ProductInfo */
+            uint ProductId;
+            uint Edition;
+            ubyte MajorVersion;
+            ubyte MinorVersion;
+            uint BuildLow;
+            uint BuildHigh;
+            uint CompilationDateLow;
+            uint CompilationDateHigh;
             break;
-        case 63:            /* MX4 */
+        case 63:            /* DebugID */
+            ubyte DebugID[16];
+            break;
+        case 93:            /* EnableTelemetry */
+            uint Reserved : 16;
             if ((SWFTagEnd-FTell())>0) {
-                ubyte Data[SWFTagEnd-FTell()];
+                ubyte PasswordHash[32];
             }
             break;
         case 253:           /* Amayeta Encryption */
@@ -2047,7 +3538,8 @@ string GetTagType(SWFTAG &Tag)
          ************************/
         case 59:    return "DoInitAction";
         case 12:    return "DoAction";
-        case 82:    return "DoABC";
+        case 72:    return "DoABC";
+        case 82:    return "DoABC2";
 
         /************************
          *  Display List Tags   *
@@ -2055,6 +3547,7 @@ string GetTagType(SWFTAG &Tag)
         case 4:     return "PlaceObject";
         case 26:    return "PlaceObject2";
         case 70:    return "PlaceObject3";
+        case 94:    return "PlaceObject4";
         case 5:     return "RemoveObject";
         case 28:    return "RemoveObject2";
         case 1:     return "ShowFrame";
@@ -2094,6 +3587,7 @@ string GetTagType(SWFTAG &Tag)
         case 8:     return "JPEGTables";
         case 21:    return "DefineBitsJPEG2";
         case 35:    return "DefineBitsJPEG3";
+        case 90:    return "DefineBitsJPEG4";
         case 20:    return "DefineBitsLossless";
         case 36:    return "DefineBitsLossless2";
 
@@ -2111,6 +3605,7 @@ string GetTagType(SWFTAG &Tag)
         case 62:    return "DefineFontInfo2";
         case 48:    return "DefineFont2";
         case 75:    return "DefineFont3";
+        case 91:    return "DefineFont4";
         case 73:    return "DefineFontAlignZones";
         case 88:    return "DefineFontName";
         case 11:    return "DefineText";
@@ -2154,9 +3649,10 @@ string GetTagType(SWFTAG &Tag)
 
         /************************
          *  Undocumented Tags   *
-         ************************/
-        case 41:    return "Serial Number";
-        case 63:    return "MX4";
+         ************************/        
+        case 41:    return "ProductInfo";
+        case 63:    return "DebugID";
+        case 93:    return "EnableTelemetry";
         case 253:   return "Amayeta Encrypt";
 
         default:    return "\0";
@@ -2191,10 +3687,19 @@ typedef struct {
     }
     else if (Signature[0] == 'C' && Signature[1] == 'W' && Signature[2] == 'S')
     {
-        Printf("This is a SWF compressed file\n");
+        Printf("This is a Zlib compressed SWF file\n");
         isCompressed = 1;
         uint UncompressedSize;
         byte ZlibData[FileSize() - FTell()];
+    }
+    else if (Signature[0] == 'Z' && Signature[1] == 'W' && Signature[2] == 'S')
+    {
+        Printf("This is a LZMA compressed SWF file\n");
+        isCompressed = 1;
+        uint UncompressedSize;        
+        uint LzmaSize;
+        ubyte LzmaProperties[5];
+        byte LzmaData[LzmaSize];
     }
 } SWFHEADER;
 
@@ -2204,7 +3709,7 @@ typedef struct {
     {
         do {
             SWFTAG Tag;
-        } while (!FEof());
+        } while (!FEof() && Tag.Header.TagType != 0);
     }
 } SWF;
 
